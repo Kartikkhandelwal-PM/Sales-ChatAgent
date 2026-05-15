@@ -370,6 +370,7 @@ if (process.env.DB_HOST) {
     database: process.env.DB_NAME     || 'kdk_chatbot',
     user:     process.env.DB_USER     || 'postgres',
     password: process.env.DB_PASSWORD || '',
+    ssl: process.env.DB_HOST !== 'localhost' ? { rejectUnauthorized: false } : false,
   });
   pgPool.query(`CREATE TABLE IF NOT EXISTS chat_logs (
       id           SERIAL PRIMARY KEY,
