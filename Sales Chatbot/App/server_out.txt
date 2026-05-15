@@ -1,0 +1,11 @@
+
+✅  KDK Sales Chatbot is live!
+   Open: http://localhost:3000
+
+✅  PostgreSQL connected — tables ready.
+
+✅ Correction #2 written to corrections.md — live immediately.
+
+📧 Lead captured: Kaku <kaku@gmail.com> — CA / Tax Professional
+
+📝 Training feedback #3 by Kaku
