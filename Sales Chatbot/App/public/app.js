@@ -87,6 +87,7 @@ let vcTimerInterval = null;
 let vcSeconds      = 0;
 let currentAudio   = null;
 let vcSilenceCount = 0;
+let vadStream      = null; // persistent mic stream for barge-in + reuse
 
 // ── Chat History State ──
 let chatSessions   = {};
@@ -1283,24 +1284,137 @@ function toggleMic() {
   else startVoiceCall();
 }
 
-// Single function used for both call mode and one-off input
+// MediaRecorder + AudioContext VAD + Whisper API for accurate Hinglish/English STT
 function startVoiceRecording() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
+  if (isRecording || isProcessingVoice) return;
+  if (!window.MediaRecorder) {
     showToast('Voice input requires Chrome or Edge browser.');
     if (voiceCallMode) endVoiceCall();
     return;
   }
-
   resultReceived = false;
-  recognition = new SR();
-  // hi-IN handles Hindi, Hinglish, and English in Chrome/Edge (best for Indian users)
-  recognition.lang = 'hi-IN';
-  recognition.continuous = false;
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
 
-  recognition.onstart = () => {
+  const doRecord = async () => {
+    try {
+      if (!vadStream || !vadStream.active) {
+        vadStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+    } catch(e) {
+      showToast('Microphone access denied. Allow it in browser settings.');
+      if (voiceCallMode) endVoiceCall();
+      return;
+    }
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const recorder = new MediaRecorder(vadStream, { mimeType });
+    mediaRecorder = recorder;
+    const chunks = [];
+    let speechDetected = false;
+    let vadCtx = null, vadInterval = null;
+
+    // AudioContext VAD: detect speech start and silence end
+    try {
+      vadCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = vadCtx.createMediaStreamSource(vadStream);
+      const an  = vadCtx.createAnalyser();
+      an.fftSize = 512;
+      an.smoothingTimeConstant = 0.8;
+      src.connect(an);
+      const buf = new Uint8Array(an.frequencyBinCount);
+      let silenceMs = 0, totalMs = 0;
+
+      vadInterval = setInterval(() => {
+        if (!isRecording) { clearInterval(vadInterval); return; }
+        an.getByteFrequencyData(buf);
+        const avg = buf.reduce((s, v) => s + v, 0) / buf.length;
+        totalMs += 100;
+        if (avg > 20) {
+          speechDetected = true;
+          silenceMs = 0;
+        } else if (speechDetected) {
+          silenceMs += 100;
+          if (silenceMs >= 1500 && recorder.state === 'recording') recorder.stop();
+        } else if (totalMs >= 6000 && recorder.state === 'recording') {
+          recorder.stop(); // no speech in 6s, give up
+        }
+        if (totalMs >= 12000 && recorder.state === 'recording') recorder.stop();
+      }, 100);
+    } catch(e) {
+      // AudioContext unavailable — fall back to fixed 5s recording
+      setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 5000);
+    }
+
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+    recorder.onstop = async () => {
+      isRecording = false;
+      if (vadInterval) clearInterval(vadInterval);
+      if (vadCtx) try { vadCtx.close(); } catch(e) {}
+      if (!voiceCallMode) {
+        if (micBtn)   micBtn.classList.remove('recording');
+        if (voiceBar) voiceBar.classList.remove('active');
+      }
+
+      const blob = new Blob(chunks, { type: mimeType });
+
+      if (!speechDetected || blob.size < 1500) {
+        // No speech — restart or idle
+        if (voiceCallMode && !isStreaming && !currentAudio && !window.speechSynthesis?.speaking) {
+          vcSilenceCount++;
+          if (vcSilenceCount <= 5) {
+            setTimeout(() => { if (voiceCallMode && !isRecording) startVoiceRecording(); }, 300);
+          } else {
+            setVcStatus('waiting');
+            setTimeout(() => { if (voiceCallMode) { vcSilenceCount = 0; startVoiceRecording(); } }, 4000);
+          }
+        }
+        return;
+      }
+
+      vcSilenceCount = 0;
+      if (voiceCallMode) setVcStatus('processing');
+
+      // Send to Whisper for accurate transcription
+      isProcessingVoice = true;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result.split(',')[1];
+          const res  = await fetch('/api/voice-transcribe', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ audio: base64, mimeType })
+          });
+          const data = await res.json();
+          const text = data.text?.trim();
+          if (text) {
+            resultReceived = true;
+            if (voiceCallMode) {
+              setVcStatus('thinking');
+              handleUserMessage(text);
+            } else {
+              msgInput.value = text;
+              msgInput.style.height = 'auto';
+              msgInput.style.height = Math.min(msgInput.scrollHeight, 130) + 'px';
+              msgInput.focus();
+            }
+          } else if (voiceCallMode && !isStreaming) {
+            setVcStatus('listening');
+            setTimeout(() => { if (voiceCallMode && !isRecording) startVoiceRecording(); }, 300);
+          }
+        } catch(e) {
+          console.error('Transcription error:', e);
+          if (voiceCallMode && !isStreaming) {
+            setVcStatus('listening');
+            setTimeout(() => { if (voiceCallMode && !isRecording) startVoiceRecording(); }, 500);
+          }
+        } finally { isProcessingVoice = false; }
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    recorder.start(200);
     isRecording = true;
     if (voiceCallMode) {
       setVcStatus('listening');
@@ -1311,73 +1425,15 @@ function startVoiceRecording() {
     }
   };
 
-  recognition.onresult = (event) => {
-    resultReceived = true;
-    vcSilenceCount = 0;
-    const text = event.results[0][0].transcript.trim();
-    if (!text) return;
-
-    if (voiceCallMode) {
-      setVcStatus('thinking');
-      handleUserMessage(text);
-    } else {
-      // One-off mode: put text in input box, user can review then send
-      msgInput.value = text;
-      msgInput.style.height = 'auto';
-      msgInput.style.height = Math.min(msgInput.scrollHeight, 130) + 'px';
-      msgInput.focus();
-      if (voiceBar)  voiceBar.classList.remove('active');
-      if (micBtn)    micBtn.classList.remove('recording');
-    }
-  };
-
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') {
-      showToast('Microphone access denied. Allow it in browser settings.');
-      if (voiceCallMode) endVoiceCall();
-    }
-    // 'no-speech' and other errors handled in onend
-  };
-
-  recognition.onend = () => {
-    isRecording = false;
-    if (!voiceCallMode) {
-      if (micBtn)   micBtn.classList.remove('recording');
-      if (voiceBar) voiceBar.classList.remove('active');
-    }
-    // In call mode, restart only if no result and bot is not busy
-    if (voiceCallMode && !resultReceived && !isStreaming && !currentAudio && !window.speechSynthesis?.speaking) {
-      vcSilenceCount++;
-      if (vcSilenceCount <= 5) {
-        setTimeout(() => { if (voiceCallMode) startVoiceRecording(); }, 400);
-      } else {
-        // After ~5s of silence, pause and show idle; auto-resume after 4s
-        setVcStatus('waiting');
-        setTimeout(() => {
-          if (voiceCallMode && !isRecording && !isStreaming) {
-            vcSilenceCount = 0;
-            startVoiceRecording();
-          }
-        }, 4000);
-      }
-    }
-  };
-
-  try {
-    recognition.start();
-  } catch(e) {
-    showToast('Could not start voice. Try clicking the mic again.');
-    if (voiceCallMode) endVoiceCall();
-  }
+  doRecord();
 }
 
 function stopVoiceRecording() {
-  if (recognition) {
-    try { recognition.abort(); } catch(e) {}
-    recognition = null;
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    try { mediaRecorder.stop(); } catch(e) {}
   }
+  mediaRecorder = null;
   isRecording = false;
-  if (voiceCallMode) setVcStatus('processing');
 }
 
 // ─────────────────────────────────────────────
@@ -1428,9 +1484,11 @@ function endVoiceCall() {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   if (window.speechSynthesis) window.speechSynthesis.cancel();
 
-  // Stop SpeechRecognition if active
   stopVoiceRecording();
   isRecording = false;
+
+  // Release microphone
+  if (vadStream) { vadStream.getTracks().forEach(t => t.stop()); vadStream = null; }
 
   document.getElementById('vc-overlay').classList.add('hidden');
   if (micBtn) { micBtn.classList.remove('active', 'recording', 'processing'); micBtn.title = 'Voice conversation'; }
@@ -1474,12 +1532,45 @@ async function speakText(text) {
   // In call mode use browser speechSynthesis — starts instantly, no API round-trip
   if (voiceCallMode && window.speechSynthesis) {
     const utter = new SpeechSynthesisUtterance(plain);
-    // Use Hindi voice if response contains Devanagari, else Indian English
     utter.lang  = /[ऀ-ॿ]/.test(plain) ? 'hi-IN' : 'en-IN';
     utter.rate  = 1.05;
     utter.pitch = 1;
     setVcStatus('speaking');
+
+    // Barge-in: if user speaks while bot is talking, cut TTS and start listening
+    let bargeCtx = null, bargeInterval = null;
+    const stopBarge = () => {
+      if (bargeInterval) { clearInterval(bargeInterval); bargeInterval = null; }
+      if (bargeCtx) { try { bargeCtx.close(); } catch(e) {} bargeCtx = null; }
+    };
+    if (vadStream && vadStream.active) {
+      try {
+        bargeCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const bSrc = bargeCtx.createMediaStreamSource(vadStream);
+        const bAn  = bargeCtx.createAnalyser();
+        bAn.fftSize = 256;
+        bSrc.connect(bAn);
+        const bBuf = new Uint8Array(bAn.frequencyBinCount);
+        let highCount = 0;
+        bargeInterval = setInterval(() => {
+          if (!voiceCallMode || !window.speechSynthesis.speaking) { stopBarge(); return; }
+          bAn.getByteFrequencyData(bBuf);
+          const avg = bBuf.reduce((s, v) => s + v, 0) / bBuf.length;
+          if (avg > 38) {
+            if (++highCount >= 3) { // 3 frames ~180ms of real speech
+              stopBarge();
+              window.speechSynthesis.cancel();
+              setVcStatus('listening');
+              vcSilenceCount = 0;
+              setTimeout(() => { if (voiceCallMode && !isRecording) startVoiceRecording(); }, 80);
+            }
+          } else { highCount = 0; }
+        }, 60);
+      } catch(e) { /* barge-in not available, no-op */ }
+    }
+
     const onCallEnd = () => {
+      stopBarge();
       if (voiceCallMode) {
         vcSilenceCount = 0;
         setVcStatus('listening');
