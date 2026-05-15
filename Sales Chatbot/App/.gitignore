@@ -12,3 +12,7 @@ feedback.json
 
 # Embeddings — either commit or regenerate on deploy (see below)
 # embeddings.json   ← uncomment this line if you want to regenerate on every deploy
+
+# Server logs
+server_out.txt
+server_err.txt

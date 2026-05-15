@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>KDK Software - Sales Chat</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -372,6 +372,8 @@
     #messages-area {
       flex: 1; min-height: 0;
       overflow-y: auto; scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
     }
     #messages-area::-webkit-scrollbar { width: 4px; }
     #messages-area::-webkit-scrollbar-thumb { background: rgba(137,153,175,.2); border-radius: 99px; }
@@ -746,25 +748,28 @@
 
     /* ─── MOBILE ─── */
     @media (max-width: 480px) {
+      body.chat-open { overflow: hidden; }
+
       #chat-widget {
-        bottom: 0; right: 0; left: 0; top: auto;
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        bottom: auto;
         width: 100%;
-        height: 100vh;
-        height: 100dvh;
-        max-height: 100vh;
-        max-height: 100dvh;
+        height: 100vh;   /* JS overrides this with exact visualViewport.height */
+        max-height: none;
         border-radius: 0;
         border-top-left-radius: 20px;
         border-top-right-radius: 20px;
       }
       #chat-widget.hidden {
-        transform: translateY(100%);
+        transform: translateY(110%);
+        opacity: 0;
+        pointer-events: none;
+        visibility: hidden;
       }
-      /* Hide floating launcher on mobile when chat is open — close button is in header */
-      #chat-launcher.open {
-        display: none !important;
-      }
+      #chat-launcher.open { display: none !important; }
       #chat-launcher { bottom: 16px; right: 16px; }
+      .composer-note { display: none; }
     }
   </style>
 </head>
