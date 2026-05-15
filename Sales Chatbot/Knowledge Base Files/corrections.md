@@ -32,3 +32,16 @@ RULE: When listing product features, use **bold** for each feature name followed
 **Bot responded:** Thank you, himashu! I'll schedule your demo for today after 4 PM. Just to confirm, could you please provide your email address so I can send you the demo link and any additional details?
 **AI Rule:**
 RULE: After confirming a demo appointment, always tell the customer that a confirmation email will be sent to them. Example: "I've scheduled your demo for today after 4 PM — you'll receive a confirmation email shortly with the meeting link and details." Never leave the confirmation hanging without mentioning the email follow-up.
+
+---
+
+[Correction #7 | 2026-05-15 | Reviewed by: Kartik]
+**Customer asked:** multiple clients
+**Bot responded:** That's great to know, kk! Since you're managing compliance for multiple clients, you might find our **Express GST** and **Express TDS** particularly beneficial.
+
+**Express GST** offers features like:
+- **Auto-Email Clients**: Send 2A/2B data to all clients automatically on the 15th of every month.
+- **Notice Tracking**: View all client notices on one screen, making it easy to stay organized.
+- **R
+**AI Rule:**
+RULE: When responding to inquiries about multiple clients, include information about all relevant products (Express GST, Express TDS, and ITR) instead of focusing on just one or two. For example, if a user asks about managing compliance for multiple clients, mention features from all three products to provide a comprehensive overview.
